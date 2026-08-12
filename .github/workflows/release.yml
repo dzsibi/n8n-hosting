@@ -1,19 +1,11 @@
-name: Release
+name: Release Helm chart
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "charts/**"
-      - "CHANGELOG.md"
-      - "release-please-config.json"
-      - ".release-please-manifest.json"
-      - ".github/workflows/release.yml"
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   packages: write
-  pull-requests: write
 
 concurrency:
   group: release
@@ -23,32 +15,27 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - name: Run Release Please
-        id: release
-        uses: googleapis/release-please-action@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
+      - uses: actions/checkout@v4
 
       - uses: azure/setup-helm@v4
-        if: steps.release.outputs.release_created == 'true'
         with:
           version: "3.17.0"
 
-      - uses: actions/checkout@v4
-        if: steps.release.outputs.release_created == 'true'
+      - name: Lint and package
+        id: package
+        run: |
+          VERSION="$(helm show chart charts/n8n | awk '$1 == "version:" { print $2 }')"
+          helm lint charts/n8n
+          mkdir -p dist
+          helm package charts/n8n --destination dist
+          echo "file=dist/n8n-${VERSION}.tgz" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
-        if: steps.release.outputs.release_created == 'true'
         run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | \
-            helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+          echo "${{ github.token }}" | \
+            helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-      - name: Package and push to GHCR
-        if: steps.release.outputs.release_created == 'true'
-        env:
-          CHART_VERSION: ${{ steps.release.outputs.version }}
+      - name: Publish chart
         run: |
-          helm package charts/n8n --destination /tmp/chart-pkg/
-          helm push "/tmp/chart-pkg/n8n-${CHART_VERSION}.tgz" oci://ghcr.io/n8n-io/n8n-helm-chart
+          helm push "${{ steps.package.outputs.file }}" \
+            "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}/n8n-helm-chart"
